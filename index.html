@@ -158,7 +158,6 @@ body:has(.full:not([hidden])) .toast{bottom:auto;top:calc(env(safe-area-inset-to
   <div class="btnrow"><button class="btn primary" data-dl="new">New playlist</button><button class="btn" data-dl="cancel">Cancel</button></div>
 </dialog>
 
-<input type="file" id="file" accept="audio/*" multiple hidden>
 <input type="file" id="restore" accept="application/json,.json" hidden>
 <audio id="audio" preload="metadata"></audio>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -272,6 +271,13 @@ async function loadMusic(reset){
   if(S.tab === 'music' && !S.view) paintGrid();
 }
 
+function archiveId(url){ const m = /archive\.org\/(?:details|download|embed)\/([^\/?#\s]+)/i.exec(url || ''); return m ? decodeURIComponent(m[1]) : ''; }
+function askArchiveLink(){
+  const url = (prompt('Paste the link of a release page on archive.org') || '').trim(); if(!url) return;
+  const id = archiveId(url);
+  if(!id){ toast('That isn’t an archive.org release link.'); return; }
+  pushNav(); openAlbum(id); window.scrollTo(0, 0);
+}
 async function openAlbum(id){
   S.view = {type:'album', id, loading:true}; render();
   try {
@@ -383,7 +389,8 @@ function showFromK(b){ const k = b.closest('[data-k]').dataset.k; const i = +k.s
 function musicHTML(){
   const mu = S.music;
   return `<h1 class="title">Music</h1>
-  <form id="music-search" role="search"><input class="search" type="search" name="q" placeholder="Search artists, titles or styles" value="${esc(mu.q)}" enterkeyhint="search" aria-label="Search music"></form>
+  <form id="music-search" role="search"><input class="search" type="search" name="q" placeholder="Search, or paste an archive.org link" value="${esc(mu.q)}" enterkeyhint="search" aria-label="Search music"></form>
+  <div class="btnrow"><button class="btn" data-act="archivelink">${svg('plus')} Open archive.org link</button></div>
   <div class="chips">${Object.entries(CATS).map(([k, c]) => `<button class="chip" data-act="cat" data-cat="${k}" aria-pressed="${mu.cat === k}">${c.label}</button>`).join('')}</div>
   <div class="grid" id="grid"></div><p class="status" id="status"></p><div class="btnrow" id="morerow"></div>`;
 }
@@ -421,7 +428,7 @@ function libHTML(){
     <input class="search" id="proxy" type="url" placeholder="https://your-helper.workers.dev" value="${esc(store.proxy)}">
     <small>Some podcast feeds block other apps from reading them. If a show won’t open, add your feed helper address here.</small></label>
   <div class="btnrow"><button class="btn" data-act="saveproxy">Save address</button></div>
-  <p class="note">Your favourites, playlists and followed shows are stored on this device only. Back them up now and then, because clearing Chrome’s data deletes them. Uploaded songs aren’t included in the backup.</p>
+  <p class="note">Your favourites, playlists and followed shows are stored on this device only. Back them up now and then, because clearing Chrome’s data deletes them.</p>
   <div class="btnrow"><button class="btn" data-act="backup">Back up</button><button class="btn" data-act="restore">Restore backup</button></div>`;
 }
 
@@ -432,7 +439,7 @@ function viewHTML(){
   if(v.type === 'album'){
     S.list = v.tracks;
     return backBtn() + hero(v.art, v.album, v.artist) +
-      (v.tracks.length ? `<div class="btnrow"><button class="btn primary" data-act="playall">${svg('play')} Play all</button></div>` + rows(v.tracks, {}) : '<p class="status">This release has no playable audio files. Go back and pick another.</p>');
+      (v.tracks.length ? `<div class="btnrow"><button class="btn primary" data-act="playall">${svg('play')} Play all</button><button class="btn" data-act="addall">${svg('plus')} Add album to playlist</button></div>` + rows(v.tracks, {}) : '<p class="status">This release has no playable audio files. Go back and pick another.</p>');
   }
   if(v.type === 'show'){
     S.list = v.episodes; const f = isFollowing(v.show.feed);
@@ -443,8 +450,8 @@ function viewHTML(){
   // list views
   let title, tracks, extra = '', empty;
   if(v.which === 'favs'){ title = 'Favourites'; tracks = store.favs; empty = 'Tap the heart on any track or episode to save it here.'; }
-  else if(v.which === 'mine'){ title = 'My music'; tracks = store.local; empty = 'Upload songs from this device, or paste a link to an audio file.';
-    extra = `<button class="btn" data-act="upload">${svg('plus')} Upload songs</button><button class="btn" data-act="link">${svg('plus')} Add audio link</button>`; }
+  else if(v.which === 'mine'){ title = 'My music'; tracks = store.local; empty = 'Paste a direct link to an audio file (ending in .mp3, .m4a or .ogg). For a whole album from archive.org, use Open archive.org link in Music.';
+    extra = `<button class="btn" data-act="link">${svg('plus')} Add audio link</button>`; }
   else {
     const pl = store.playlists.find(p => p.id === v.which.slice(3));
     if(!pl){ S.view = null; return libHTML(); }
@@ -487,14 +494,17 @@ function toggleFav(t){
 }
 let pending = null;
 function openAddDialog(t){
-  pending = clean(t);
+  pending = Array.isArray(t) ? t.map(clean) : [clean(t)];
   const d = $('#pl-dialog');
+  d.querySelector('h3').textContent = pending.length > 1 ? 'Add album to playlist' : 'Add to playlist';
   d.querySelector('.list').innerHTML = store.playlists.map((p, i) => `<button class="lib-item" data-pl="${i}">${esc(p.name)}<span>${p.tracks.length}</span></button>`).join('') || '<p class="note">No playlists yet. Create one below.</p>';
   d.showModal();
 }
 function addTo(p){
-  if(p.tracks.some(x => x.src === pending.src)){ toast('Already in ' + p.name); return; }
-  p.tracks.push(pending); save(); toast('Added to ' + p.name);
+  const fresh = pending.filter(t => !p.tracks.some(x => x.src === t.src));
+  if(!fresh.length){ toast('Already in ' + p.name); return; }
+  p.tracks.push(...fresh); save();
+  toast(fresh.length > 1 ? 'Added ' + fresh.length + ' tracks to ' + p.name : 'Added to ' + p.name);
   if(S.tab === 'library') render();
 }
 $('#pl-dialog').addEventListener('click', e => {
@@ -523,6 +533,7 @@ function addLink(){
   let url = prompt('Paste a direct link to an audio file. It usually ends in .mp3, .m4a or .ogg.');
   if(!url) return; url = url.trim();
   if(!/^https?:\/\//i.test(url)){ toast('That doesn’t look like a web link.'); return; }
+  if(/archive\.org\/(details|embed)\//i.test(url)){ pushNav(); openAlbum(archiveId(url)); window.scrollTo(0, 0); return; }
   if(/(youtube\.com|youtu\.be|spotify\.com|soundcloud\.com|mixcloud\.com|bandcamp\.com)/i.test(url)){
     alert('Links to YouTube, Spotify, SoundCloud, Mixcloud or Bandcamp pages can’t play here, because those sites only play inside their own players. Use a direct link to an audio file instead.'); return;
   }
@@ -557,23 +568,12 @@ $('#restore').addEventListener('change', async e => {
   } catch(err){ toast('This isn’t a Focus Player backup file.'); }
 });
 
-$('#file').addEventListener('change', async e => {
-  const files = [...e.target.files]; e.target.value = ''; if(!files.length) return;
-  toast('Adding ' + files.length + (files.length > 1 ? ' songs…' : ' song…'));
-  try {
-    for(const f of files){
-      const id = uid(); await putFile(id, f);
-      store.local.push({kind:'local', src:'local:' + id, title:f.name.replace(/\.[^.]+$/, ''), artist:'My music', album:'My music', art:''});
-    }
-    save(); toast('Added to My music');
-  } catch(err){ save(); toast('Couldn’t save the file. Your phone may be low on space.'); }
-  render();
-});
 
 $('#main').addEventListener('submit', e => {
   e.preventDefault();
   const input = e.target.querySelector('input'); const v = input.value.trim(); input.blur();
-  if(e.target.id === 'music-search'){ S.music.q = v; S.music.items = []; S.music.error = ''; S.music.loading = false; render(); }
+  if(e.target.id === 'music-search' && archiveId(v)){ input.value = ''; pushNav(); openAlbum(archiveId(v)); }
+  else if(e.target.id === 'music-search'){ S.music.q = v; S.music.items = []; S.music.error = ''; S.music.loading = false; render(); }
   else if(e.target.id === 'pod-search'){ if(v) searchPods(v); else { S.pod.q = ''; S.pod.results = null; S.pod.error = ''; render(); } }
 });
 
@@ -583,6 +583,8 @@ $('#main').addEventListener('click', e => {
   switch(act){
     case 'cat': S.music.cat = b.dataset.cat; S.music.items = []; S.music.error = ''; S.music.loading = false; render(); break;
     case 'more': loadMusic(false); break;
+    case 'archivelink': askArchiveLink(); break;
+    case 'addall': openAddDialog(S.list); break;
     case 'retry': S.music.error = ''; if(S.music.items.length) loadMusic(false); else render(); break;
     case 'album': pushNav(); openAlbum(b.dataset.id); break;
     case 'back': history.back(); break;
@@ -605,7 +607,6 @@ $('#main').addEventListener('click', e => {
     case 'newpl': { const name = prompt('Name your playlist'); if(name && name.trim()){ store.playlists.push({id:uid(), name:name.trim(), tracks:[]}); save(); render(); toast('Playlist created'); } break; }
     case 'renamepl': { const pl = store.playlists.find(p => p.id === S.view.which.slice(3)); const name = prompt('New name', pl.name); if(name && name.trim()){ pl.name = name.trim(); save(); render(); } break; }
     case 'delpl': if(confirm('Delete this playlist? The songs themselves stay where they are.')){ store.playlists = store.playlists.filter(p => p.id !== S.view.which.slice(3)); save(); history.back(); toast('Playlist deleted'); } break;
-    case 'upload': $('#file').click(); break;
     case 'link': addLink(); break;
     case 'saveproxy': { const v = $('#proxy').value.trim(); if(v && !/^https:\/\//i.test(v)){ toast('The address must start with https://'); break; } store.proxy = v; save(); toast(v ? 'Feed helper saved' : 'Feed helper removed'); break; }
     case 'backup': backup(); break;
